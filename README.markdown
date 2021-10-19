@@ -8,6 +8,11 @@ This extension was created based on gimp_xcf.
 - Select Photoshop PSD(*.psd)
 - Click Save button
 
+## Requirements
+
+- Inkscape 1.0 or later
+- GIMP
+
 ## License
 
 GPL
