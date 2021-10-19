@@ -2,13 +2,13 @@
 <inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
     <_name>GIMP PSD</_name>
     <id>org.ekips.output.gimp_psd</id>
-	<dependency type="extension">org.inkscape.output.svg.inkscape</dependency>
-	<dependency type="executable" location="extensions">gimp_psd.py</dependency>
-	<dependency type="executable" location="extensions">inkex.py</dependency>
-	<dependency type="executable" location="path">gimp</dependency>
+        <dependency type="extension">org.inkscape.output.svg.inkscape</dependency>
+        <dependency type="executable" location="path">gimp</dependency>
 	
-	<param name="guides" type="boolean" _gui-text="Save Guides:">false</param>
-	<param name="grid" type="boolean" _gui-text="Save Grid:">false</param>
+        <param name="guides" type="boolean" _gui-text="Save Guides:">false</param>
+        <param name="grid" type="boolean" _gui-text="Save Grid:">false</param>
+        <param name="background" type="bool" gui-text="Save Background">false</param>
+        <param name="dpi" type="float" min="1" max="3000" gui-text="File Resolution:">96</param>
     <output>
                 <extension>.psd</extension>
                 <mimetype>application/x-psd</mimetype>

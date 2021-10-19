@@ -1,151 +1,120 @@
-#!/usr/bin/env python 
-'''
-Copyright (C) 2006 Aaron Spike, aaron@ekips.org
-Copyright (C) 2010 Nicolas Dufour, nicoduf@yahoo.fr (Windows support and various fixes)
+#!/usr/bin/env python
+# coding=utf-8
+#
+# Copyright (C) 2006 Aaron Spike, aaron@ekips.org
+# Copyright (C) 2010-2012 Nicolas Dufour, nicoduf@yahoo.fr
+# (Windows support and various fixes)
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+#
+"""
+Export to Gimp's XCF file format including Grids and Guides.
+"""
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 2 of the License, or
-(at your option) any later version.
+import os
+from collections import OrderedDict
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-'''
 import inkex
-import sys, os, tempfile, shutil
-import gettext
+from inkex.base import TempDirMixin
+from inkex.command import take_snapshot, call
+from inkex.localization import inkex_gettext as _
 
-try:
-    from subprocess import Popen, PIPE
-    bsubprocess = True
-except:
-    bsubprocess = False
+class GimpXcf(TempDirMixin, inkex.OutputExtension):
+    """
+    Provide a quick and dirty way of using gimp to output an xcf from Inkscape.
 
-class MyEffect(inkex.Effect):
-    def __init__(self):
-        inkex.Effect.__init__(self)
-        self.OptionParser.add_option("-d", "--guides",
-                                         action="store", type="inkbool",
-                                         dest="saveGuides", default=False,
-                                         help="Save the Guides with the .XCF")
-        self.OptionParser.add_option("-r", "--grid",
-                                         action="store", type="inkbool",
-                                         dest="saveGrid", default=False,
-                                         help="Save the Grid with the .XCF")
+    Both Inkscape and Gimp must be installed for this extension to work.
+    """
+    dir_prefix = 'gimp-out-'
 
-    def output(self):
-        pass
+    def add_arguments(self, pars):
+        pars.add_argument("--tab", dest="tab")
+        pars.add_argument("-d", "--guides", type=inkex.Boolean, help="Save the Guides in the XCF")
+        pars.add_argument("-r", "--grid", type=inkex.Boolean, help="Save the Grid with the .XCF")
+        pars.add_argument("-b", "--background", type=inkex.Boolean, help="Add background color")
+        pars.add_argument("-i", "--dpi", type=float, default=96.0, help="File resolution")
 
-    def clear_tmp(self):
-        shutil.rmtree(self.tmp_dir)
+    def get_guides(self):
+        """Generate a list of horzontal and vertical only guides"""
+        horz_guides = []
+        vert_guides = []
+        # Grab all guide tags in the namedview tag
+        for guide in self.svg.namedview.get_guides():
+            if guide.is_horizontal:
+                # GIMP doesn't like guides that are outside of the image
+                if 0 < guide.point.y < self.svg.height:
+                    # The origin is at the top in GIMP land
+                    horz_guides.append(str(guide.point.y))
+            elif guide.is_vertical:
+                # GIMP doesn't like guides that are outside of the image
+                if 0 < guide.point.x < self.svg.width:
+                    vert_guides.append(str(guide.point.x))
 
-    def effect(self):
-        svg_file = self.args[-1]
-        ttmp_orig = self.document.getroot()
-        docname = ttmp_orig.get(inkex.addNS('docname',u'sodipodi'))
-        if docname is None: docname = self.args[-1]
+        return ('h', ' '.join(horz_guides)), ('v', ' '.join(vert_guides))
 
-        pageHeight = int(inkex.unittouu(self.xpathSingle('/svg:svg/@height').split('.')[0]))
-        pageWidth = int(inkex.unittouu(self.xpathSingle('/svg:svg/@width').split('.')[0]))
+    def get_grid(self):
+        """Get the grid if asked for and return as gimpfu script"""
+        scale = (self.svg.scale) * (self.options.dpi / 96.0)
+        # GIMP only allows one rectangular grid
+        xpath = "sodipodi:namedview/inkscape:grid[@type='xygrid' and (not(@units) or @units='px')]"
+        if self.svg.xpath(xpath):
+            node = self.svg.getElement(xpath)
+            for attr, default, target in (('spacing', 1, 'spacing'), ('origin', 0, 'offset')):
+                fmt = {'target': target}
+                for dim in 'xy':
+                    # These attributes could be nonexistent
+                    unit = float(node.get(attr + dim, default))
+                    unit = self.svg.uutounit(unit, "px") * scale
+                    fmt[dim] = int(round(float(unit)))
+                yield '(gimp-image-grid-set-{target} img {x} {y})'.format(**fmt)
 
-        #create os temp dir
-        self.tmp_dir = tempfile.mkdtemp()
+    @property
+    def docname(self):
+        """Get the document name suitable for export"""
+        return self.svg.get('sodipodi:docname') or 'document'
 
-        # Guides
-        hGuides = []
-        vGuides = []
-        valid = 0
-        if self.options.saveGuides:
-            guideXpath = "sodipodi:namedview/sodipodi:guide" #grab all guide tags in the namedview tag
-            for guideNode in self.document.xpath(guideXpath, namespaces=inkex.NSS):
-                ori = guideNode.get('orientation')
-                if  ori == '0,1':
-                    #this is a horizontal guide
-                    pos = int(guideNode.get('position').split(',')[1].split('.')[0])
-                    #GIMP doesn't like guides that are outside of the image
-                    if pos > 0 and pos < pageHeight:
-                        #the origin is at the top in GIMP land
-                        hGuides.append(str(pageHeight - pos))
-                elif ori == '1,0':
-                    #this is a vertical guide
-                    pos = int(guideNode.get('position').split(',')[0].split('.')[0])
-                    #GIMP doesn't like guides that are outside of the image
-                    if pos > 0 and pos < pageWidth:
-                        vGuides.append(str(pos))
+    def save(self, stream):
 
-        hGList = ' '.join(hGuides)
-        vGList = ' '.join(vGuides)
+        pngs = OrderedDict()
+        valid = False
 
-        # Grid
-        gridSpacingFunc = ''
-        gridOriginFunc = '' 
-        #GIMP only allows one rectangular grid
-        gridXpath = "sodipodi:namedview/inkscape:grid[@type='xygrid' and (not(@units) or @units='px')]"
-        if (self.options.saveGrid and self.document.xpath(gridXpath, namespaces=inkex.NSS)):
-            gridNode = self.xpathSingle(gridXpath)
-            if gridNode != None:
-                #these attributes could be nonexistant
-                spacingX = gridNode.get('spacingx')
-                if spacingX == None: spacingX = '1  '
+        for node in self.svg.xpath("/svg:svg/*[name()='g' or @style][@id]"):
+            if not len(node): # pylint: disable=len-as-condition
+                # Ignore empty layers
+                continue
 
-                spacingY = gridNode.get('spacingy')
-                if spacingY == None: spacingY = '1  '
+            valid = True
+            node_id = node.get('id')
+            name = node.get("inkscape:label", node_id)
 
-                originX = gridNode.get('originx')
-                if originX == None: originX = '0  '
+            pngs[name] = take_snapshot(
+                self.document,
+                dirname=self.tempdir,
+                name=name,
+                dpi=int(self.options.dpi),
+                export_id=node_id,
+                export_id_only=True,
+                export_area_page=True,
+                export_background_opacity=int(bool(self.options.background))
+            )
 
-                originY = gridNode.get('originy')
-                if originY == None: originY = '0  '
+        if not valid:
+            inkex.errormsg(_('This extension requires at least one non empty layer.'))
+            return
 
-                gridSpacingFunc = '(gimp-image-grid-set-spacing img %s %s)' % (spacingX[:-2], spacingY[:-2])
-                gridOriginFunc = '(gimp-image-grid-set-offset img %s %s)'% (originX[:-2], originY[:-2])
-
-        # Layers
-        area = '--export-area-page'
-        pngs = []
-        names = []
-        path = "/svg:svg/*[name()='g' or @style][@id]"
-        for node in self.document.xpath(path, namespaces=inkex.NSS):
-            if len(node) > 0: # Get rid of empty layers
-                valid=1
-                id = node.get('id')
-                if node.get("{" + inkex.NSS["inkscape"] + "}label"):
-                    name = node.get("{" + inkex.NSS["inkscape"] + "}label")
-                else:
-                    name = id
-                filename = os.path.join(self.tmp_dir, "%s.png" % id)
-                command = "inkscape -i %s -j %s -e %s %s " % (id, area, filename, svg_file)
-                if bsubprocess:
-                    p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
-                    return_code = p.wait()
-                    f = p.stdout
-                    err = p.stderr
-                else:
-                    _,f,err = os.popen3(command,'r')
-                f.read()
-                f.close()
-                err.close()
-                if os.name == 'nt':
-                    filename = filename.replace("\\", "/")
-                pngs.append(filename)
-                names.append(name.encode('utf-8'))
-
-        if (valid==0):
-            inkex.errormsg(gettext.gettext('This extension requires at least one non empty layer.'))
-            self.clear_tmp()
-            sys.exit(0)
-
-        filelist = '"%s"' % '" "'.join(pngs)
-        namelist = '"%s"' % '" "'.join(names)
-        xcf = os.path.join(self.tmp_dir, "%s.psd" % docname)
-        if os.name == 'nt':
-            xcf = xcf.replace("\\", "/")
+        xcf = os.path.join(self.tempdir, "{}.psd".format(self.docname))
         script_fu = """
 (tracing 1)
 (define
@@ -164,60 +133,47 @@ class MyEffect(inkex.Effect):
   (
     (img (car (gimp-image-new 200 200 RGB)))
   )
+  (gimp-image-set-resolution img {dpi} {dpi})
   (gimp-image-undo-disable img)
   (for-each
     (lambda (names)
       (png-to-layer img (car names) (cdr names))
     )
-    (map cons '(%s) '(%s))
+    (map cons '("{files}") '("{names}"))
   )
 
   (gimp-image-resize-to-layers img)
+""".format(
+    dpi=self.options.dpi,
+    files='" "'.join(pngs.values()),
+    names='" "'.join(list(pngs))
+)
 
+        if self.options.guides:
+            for dim, guides in self.get_guides():
+                script_fu += """
   (for-each
-    (lambda (hGuide)
-      (gimp-image-add-hguide img hGuide)
+    (lambda ({d}Guide)
+      (gimp-image-add-{d}guide img {d}Guide)
     )
-    '(%s)
-  )
+    '({g})
+  )""".format(d=dim, g=guides)
 
-  (for-each
-    (lambda (vGuide)
-      (gimp-image-add-vguide img vGuide)
-    )
-    '(%s)
-  )
+        # Grid
+        if self.options.grid:
+            for fu_let in self.get_grid():
+                script_fu += "\n" + fu_let + "\n"
 
-  %s
-  %s
-
+        script_fu += """
   (gimp-image-undo-enable img)
-  (file-psd-save RUN-NONINTERACTIVE img (car (gimp-image-get-active-layer img)) "%s" "%s" 0 0))
+  (file-psd-save RUN-NONINTERACTIVE img (car (gimp-image-get-active-layer img)) "{xcf}" "{xcf}" 0 0))
 (gimp-quit 0)
-        """ % (filelist, namelist, hGList, vGList, gridSpacingFunc, gridOriginFunc, xcf, xcf)
+            """.format(xcf=xcf)
 
-        junk = os.path.join(self.tmp_dir, 'junk_from_gimp.txt')
-        f = os.popen('gimp -i --batch-interpreter plug-in-script-fu-eval -b - > %s 2>&1' % junk,'w')
-        f.write(script_fu)
-        f.close()
-        # uncomment these lines to see the output from gimp
-        #err = open(junk, 'r')
-        #inkex.debug(err.read())
-        #err.close()
+        call('gimp', "-b", "-", i=True, batch_interpreter="plug-in-script-fu-eval", stdin=script_fu)
 
-        x = open(xcf, 'rb')
-        if os.name == 'nt':
-            try:
-                import msvcrt
-                msvcrt.setmode(1, os.O_BINARY)
-            except:
-                pass
-        sys.stdout.write(x.read())
-        x.close()
-        self.clear_tmp()
-
+        with open(xcf, 'rb') as fhl:
+            stream.write(fhl.read())
 
 if __name__ == '__main__':
-    e = MyEffect()
-    e.affect()
-
+    GimpXcf().run()
