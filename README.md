@@ -4,7 +4,7 @@ This extension was created based on gimp_xcf.
 
 ## Installation
 
-Download this repository as a zip file [here](archive/refs/heads/master.zip)
+Download this repository as a zip file clicking on 'Code' and choosing 'Download ZIP'
 and extract it on the extensions folder of the Inkscape(on linux system it's
 ~/.config/inkscape/extensions) and move 'gimp_psd.inx' one level up, then
 rename the `gim_psd-<branch-name>` folder to `gimp_psd`.
